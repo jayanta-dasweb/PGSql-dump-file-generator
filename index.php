@@ -4,9 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PostgreSQL Dump Generator - Tree View</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Styles -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" />
+    <!-- Or for RTL support -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.rtl.min.css" />
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <style>
         .table-list, .field-list {
             padding-left: 20px;
@@ -43,6 +52,10 @@
             transform: translate(-50%, -50%);
             z-index: 1000;
         }
+
+        #schemaDropdown{
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -56,11 +69,8 @@
             </div>
         </div>
 
-        <!-- Search bar for filtering schemas -->
-        <input type="text" id="schemaSearch" class="form-control mb-3" placeholder="Search for schemas...">
-
         <!-- Database Connection Form -->
-        <form id="dbConnectForm" class="mt-4">
+        <form id="dbConnectForm" class="mt-4 mb-4">
             <div class="row">
                 <div class="col-md-3">
                     <input type="text" name="host" class="form-control" placeholder="Host" required>
@@ -78,9 +88,12 @@
             <button type="submit" id="connectBtn" class="btn btn-primary mt-3">Connect</button>
         </form>
 
+         <!-- Select2 for Schema Selection -->
+         <select id="schemaDropdown" class="form-select select2-bootstrap" style="width: 100%;" >
+            <option value="">---Select Schema---</option>
+        </select>
         <!-- Tree View for Schemas, Tables, and Fields -->
-        <div id="treeContainer" class="mt-5 d-none">
-            <h3>Schemas</h3>
+        <div id="treeContainer" class="mt-1 d-none" style="height: 500px; overflow-y: auto;">
             <div id="schemaList"></div>
         </div>
 
@@ -108,6 +121,7 @@
             // Handle database connection and fetching schemas
             $('#dbConnectForm').on('submit', function (e) {
                 e.preventDefault();
+                $("#schemaDropdown").css('display','none');
                 showPreloader();
                 $.ajax({
                     url: 'process.php',
@@ -116,6 +130,7 @@
                     success: function (response) {
                         var schemas = JSON.parse(response);
                         populateSchemas(schemas);
+                        loadSchemaNames(schemas);
                         $('#treeContainer').removeClass('d-none');  // Show the tree view
                         hidePreloader();
                     },
@@ -126,14 +141,14 @@
                 });
             });
 
-           // Function to dynamically render schemas with collapsible sections
+            // Function to dynamically render schemas with collapsible sections
             function populateSchemas(schemas) {
                 var schemaList = $('#schemaList');
                 schemaList.empty();  // Clear any existing content
 
                 $.each(schemas, function(index, schema) {
                     var schemaItem = `
-                        <div>
+                        <div class="mt-2">
                             <button class="collapsible" id="collapsible_${schema.name}"><i class="fas fa-database icon"></i> ${schema.name}</button>
                             <div class="content">
                                 <div class="table-list d-none" id="tables_${schema.name}"></div>
@@ -148,47 +163,94 @@
                     var content = $(this).next(".content");
                     content.toggle();  // Toggle visibility of the content (tables)
 
-                    // Load tables only when the schema is expanded
+                    // Load tables when the schema is expanded
                     var schemaName = $(this).text().trim();
-                    if (content.is(':visible') && !selectedSchemas[schemaName]) {
-                        fetchTables(schemaName);
+                    console.log("Schema clicked:", schemaName);  // Debugging
+
+                    fetchTablesForSelectedSchema(schemaName);  // Always fetch tables
+                });
+                $("#schemaDropdown").css('display','block');
+            }
+
+            // Fetch and populate schema names in Select2
+            function loadSchemaNames(schemas) {
+                var $dropdown = $('#schemaDropdown');
+                $dropdown.empty(); // Clear previous options
+
+                // Add default option
+                $dropdown.append('<option value="">---Select Schema---</option>');
+
+                // Add schema names as options in the dropdown
+                $.each(schemas, function (index, schema) {
+                    $dropdown.append(new Option(schema.name, schema.name));
+                });
+
+                // Reinitialize Select2
+                $dropdown.select2({
+                    theme: 'bootstrap-5',
+                    placeholder: "---Select Schema---",
+                    allowClear: true,
+                    width: '100%',  // Ensure it takes full width
+                });
+
+                // Event when a schema is selected
+                $dropdown.on('select2:select', function (e) {
+                    var selectedSchema = $(this).val(); // Get selected schema name
+
+                    // Hide all schemas
+                    $('#schemaList > div').hide();
+
+                    // Show only the selected schema
+                    if (selectedSchema) {
+                        $('#collapsible_' + selectedSchema).parent().show(); // Show the schema and its tables
+                        fetchTablesForSelectedSchema(selectedSchema);
+                    }
+                });
+
+                // Event when the "Select Schema" option is selected or clear icon is clicked
+                $dropdown.on('select2:clear change', function () {
+                    var selectedSchema = $(this).val();
+                    
+                    // Show all schemas when selection is cleared or "Select Schema" is chosen
+                    if (selectedSchema === "") {
+                        $('#schemaList > div').show();
                     }
                 });
             }
 
-            // Add search functionality
-            $('#schemaSearch').on('keyup', function() {
-                var value = $(this).val().toLowerCase();
-                $('#schemaList div button').filter(function() {
-                    $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1)
-                });
-            });
-
             // Function to fetch tables for a schema and render them
-            function fetchTables(schemaName) {
-                var formData = $('#dbConnectForm').serialize();  // Get connection credentials
+            function fetchTablesForSelectedSchema(schemaName) {
+                var formData = $('#dbConnectForm').serialize();
+
                 $.ajax({
                     url: 'process.php',
                     type: 'POST',
                     data: formData + '&schema=' + schemaName + '&action=getTables',
-                    success: function(response) {
+                    success: function (response) {
                         var tables = JSON.parse(response);
                         var tableList = $('#tables_' + schemaName);
-                        tableList.empty().removeClass('d-none');
+                        tableList.empty().removeClass('d-none'); // Clear previous tables and show new ones
 
-                        $.each(tables, function(index, table) {
-                            var tableItem = `
-                                <div class="form-check">
-                                    <input class="form-check-input table-checkbox" type="checkbox" value="${table.name}" id="table_${table.name}" data-schema="${schemaName}">
-                                    <label class="form-check-label" for="table_${table.name}">
-                                        <i class="fas fa-table icon"></i> ${table.name}
-                                    </label>
-                                    <div class="field-list d-none" id="fields_${table.name}"></div>
-                                </div>`;
-                            tableList.append(tableItem);
+                        // Use a Set to prevent duplicate tables
+                        var tableSet = new Set();
+
+                        $.each(tables, function (index, table) {
+                            if (!tableSet.has(table.name)) { // Check for duplicates
+                                tableSet.add(table.name); // Add table to Set
+
+                                var tableItem = `
+                                    <div class="form-check">
+                                        <input class="form-check-input table-checkbox" type="checkbox" value="${table.name}" id="table_${table.name}" data-schema="${schemaName}">
+                                        <label class="form-check-label" for="table_${table.name}">
+                                            <i class="fas fa-table icon"></i> ${table.name}
+                                        </label>
+                                        <div class="field-list d-none" id="fields_${table.name}"></div>
+                                    </div>`;
+                                tableList.append(tableItem);
+                            }
                         });
                     },
-                    error: function(err) {
+                    error: function (err) {
                         console.error("Error fetching tables: ", err);
                     }
                 });
@@ -219,9 +281,7 @@
                     $('#fields_' + tableName).addClass('d-none').empty();
                 }
 
-                // Update schema background color based on table/field selection
                 toggleSchemaBackground(schemaName);
-
                 toggleGenerateDumpButton();  // Toggle the dump button visibility
             });
 
@@ -236,16 +296,23 @@
                         var fieldList = $('#fields_' + tableName);
                         fieldList.empty().removeClass('d-none');
 
+                        // Use a Set to prevent duplicate fields
+                        var fieldSet = new Set();
+
                         $.each(fields, function(index, field) {
-                            var fieldId = `field_${schemaName}_${tableName}_${field.name}`;
-                            var fieldItem = `
-                                <div class="form-check">
-                                    <input class="form-check-input field-checkbox" type="checkbox" value="${field.name}" id="${fieldId}" data-schema="${schemaName}" data-table="${tableName}">
-                                    <label class="form-check-label" for="${fieldId}">
-                                        <i class="fas fa-columns icon"></i> ${field.name} (${field.data_type}, ${field.is_nullable ? 'NULL' : 'NOT NULL'}, ${field.column_default ? 'Default: ' + field.column_default : 'No Default'})
-                                    </label>
-                                </div>`;
-                            fieldList.append(fieldItem);
+                            if (!fieldSet.has(field.name)) {  // Check for duplicates
+                                fieldSet.add(field.name);  // Add field to Set
+
+                                var fieldId = `field_${schemaName}_${tableName}_${field.name}`;
+                                var fieldItem = `
+                                    <div class="form-check">
+                                        <input class="form-check-input field-checkbox" type="checkbox" value="${field.name}" id="${fieldId}" data-schema="${schemaName}" data-table="${tableName}">
+                                        <label class="form-check-label" for="${fieldId}">
+                                            <i class="fas fa-columns icon"></i> ${field.name} (${field.data_type}, ${field.is_nullable ? 'NULL' : 'NOT NULL'}, ${field.column_default ? 'Default: ' + field.column_default : 'No Default'})
+                                        </label>
+                                    </div>`;
+                                fieldList.append(fieldItem);
+                            }
                         });
                     },
                     error: function(err) {
@@ -392,7 +459,6 @@
                     }
                 });
             });
-
         });
     </script>
 </body>
