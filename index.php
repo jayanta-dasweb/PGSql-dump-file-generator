@@ -30,11 +30,31 @@
             overflow: hidden;
             padding: 10px;
         }
+        .collapsible.selected {
+            background-color: #d1e7dd;  /* Light green background */
+            color: #0f5132;  /* Dark green text */
+        }
+        /* Preloader styles */
+        .preloader {
+            display: none;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
     <div class="container mt-5">
         <h1 class="text-center">PostgreSQL Dump Generator</h1>
+
+        <!-- Preloader -->
+        <div id="preloader" class="preloader">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
 
         <!-- Search bar for filtering schemas -->
         <input type="text" id="schemaSearch" class="form-control mb-3" placeholder="Search for schemas...">
@@ -55,7 +75,7 @@
                     <input type="text" name="dbname" class="form-control" placeholder="Database Name" required>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary mt-3">Connect</button>
+            <button type="submit" id="connectBtn" class="btn btn-primary mt-3">Connect</button>
         </form>
 
         <!-- Tree View for Schemas, Tables, and Fields -->
@@ -66,15 +86,29 @@
 
         <!-- Button to trigger the dump generation -->
         <button id="generateDump" class="btn btn-success mt-3 d-none">Generate SQL Dump</button>
+
+        <!-- Button to trigger the CSV export -->
+        <button id="exportCsv" class="btn btn-primary mt-3 d-none">Export CSV</button>
     </div>
 
     <script>
         $(document).ready(function() {
             var selectedSchemas = {};  // Store selected schemas, tables, and fields
 
+            // Show preloader
+            function showPreloader() {
+                $('#preloader').show();
+            }
+
+            // Hide preloader
+            function hidePreloader() {
+                $('#preloader').hide();
+            }
+
             // Handle database connection and fetching schemas
             $('#dbConnectForm').on('submit', function (e) {
                 e.preventDefault();
+                showPreloader();
                 $.ajax({
                     url: 'process.php',
                     type: 'POST',
@@ -83,14 +117,16 @@
                         var schemas = JSON.parse(response);
                         populateSchemas(schemas);
                         $('#treeContainer').removeClass('d-none');  // Show the tree view
+                        hidePreloader();
                     },
                     error: function(err) {
                         console.error("Error in connection: ", err);
+                        hidePreloader();
                     }
                 });
             });
 
-            // Function to dynamically render schemas with collapsible sections
+           // Function to dynamically render schemas with collapsible sections
             function populateSchemas(schemas) {
                 var schemaList = $('#schemaList');
                 schemaList.empty();  // Clear any existing content
@@ -98,7 +134,7 @@
                 $.each(schemas, function(index, schema) {
                     var schemaItem = `
                         <div>
-                            <button class="collapsible"><i class="fas fa-database icon"></i> ${schema.name}</button>
+                            <button class="collapsible" id="collapsible_${schema.name}"><i class="fas fa-database icon"></i> ${schema.name}</button>
                             <div class="content">
                                 <div class="table-list d-none" id="tables_${schema.name}"></div>
                             </div>
@@ -175,14 +211,17 @@
                     if (!selectedSchemas[schemaName].tables[tableName]) {
                         selectedSchemas[schemaName].tables[tableName] = { fields: [] };
                     }
-
-                    // Fetch fields for this table, including connection credentials
-                    fetchFields(schemaName, tableName, formData);  // Pass schemaName and tableName
+                    // Fetch fields for this table
+                    fetchFields(schemaName, tableName, formData);
                 } else {
                     // Remove table from selectedSchemas
                     delete selectedSchemas[schemaName].tables[tableName];
                     $('#fields_' + tableName).addClass('d-none').empty();
                 }
+
+                // Update schema background color based on table/field selection
+                toggleSchemaBackground(schemaName);
+
                 toggleGenerateDumpButton();  // Toggle the dump button visibility
             });
 
@@ -198,10 +237,11 @@
                         fieldList.empty().removeClass('d-none');
 
                         $.each(fields, function(index, field) {
+                            var fieldId = `field_${schemaName}_${tableName}_${field.name}`;
                             var fieldItem = `
                                 <div class="form-check">
-                                    <input class="form-check-input field-checkbox" type="checkbox" value="${field.name}" id="field_${field.name}" data-schema="${schemaName}" data-table="${tableName}">
-                                    <label class="form-check-label" for="field_${field.name}">
+                                    <input class="form-check-input field-checkbox" type="checkbox" value="${field.name}" id="${fieldId}" data-schema="${schemaName}" data-table="${tableName}">
+                                    <label class="form-check-label" for="${fieldId}">
                                         <i class="fas fa-columns icon"></i> ${field.name} (${field.data_type}, ${field.is_nullable ? 'NULL' : 'NOT NULL'}, ${field.column_default ? 'Default: ' + field.column_default : 'No Default'})
                                     </label>
                                 </div>`;
@@ -217,8 +257,8 @@
             // Handle field checkbox click event to select/deselect fields
             $(document).on('change', '.field-checkbox', function() {
                 var fieldName = $(this).val();
-                var tableName = $(this).data('table');  // Use data attribute to get the table name
-                var schemaName = $(this).data('schema');  // Use data attribute to get the schema name
+                var tableName = $(this).data('table');
+                var schemaName = $(this).data('schema');
                 var isChecked = $(this).is(':checked');
 
                 // Check if schema exists before adding fields
@@ -230,23 +270,42 @@
                 }
 
                 if (isChecked) {
-                    // Add the field to the selected fields array
                     selectedSchemas[schemaName].tables[tableName].fields.push(fieldName);
                 } else {
-                    // Remove the field from the selected fields array
                     var fieldIndex = selectedSchemas[schemaName].tables[tableName].fields.indexOf(fieldName);
                     if (fieldIndex > -1) {
                         selectedSchemas[schemaName].tables[tableName].fields.splice(fieldIndex, 1);
                     }
                 }
-                toggleGenerateDumpButton();  // Toggle the dump button visibility
+                toggleGenerateDumpButton();
+                toggleSchemaBackground(schemaName);
             });
 
-            // Enable or disable the "Generate SQL Dump" button based on selections
+            // Function to toggle schema background based on selections
+            function toggleSchemaBackground(schemaName) {
+                var schemaSelected = false;
+
+                // Check if any tables and fields are selected for the schema
+                if (selectedSchemas[schemaName]) {
+                    $.each(selectedSchemas[schemaName].tables, function(tableName, table) {
+                        if (table.fields.length > 0) {
+                            schemaSelected = true;  // Mark schema as selected if at least one field is chosen
+                        }
+                    });
+                }
+
+                // Update the background color of the schema collapsible based on the selection status
+                if (schemaSelected) {
+                    $('#collapsible_' + schemaName).addClass('selected');  // Add green background for selected schema
+                } else {
+                    $('#collapsible_' + schemaName).removeClass('selected');  // Remove background if nothing is selected
+                }
+            }
+
+            // Enable or disable the "Generate SQL Dump" and "Export CSV" buttons based on selections
             function toggleGenerateDumpButton() {
                 var anyFieldsSelected = false;
 
-                // Check if there are any selected fields
                 $.each(selectedSchemas, function(schemaName, schema) {
                     $.each(schema.tables, function(tableName, table) {
                         if (table.fields.length > 0) {
@@ -257,8 +316,10 @@
 
                 if (anyFieldsSelected) {
                     $('#generateDump').removeClass('d-none');
+                    $('#exportCsv').removeClass('d-none');
                 } else {
                     $('#generateDump').addClass('d-none');
+                    $('#exportCsv').addClass('d-none');
                 }
             }
 
@@ -267,18 +328,71 @@
                 var formData = $('#dbConnectForm').serialize();
                 var selectedData = JSON.stringify(selectedSchemas);
 
+                showPreloader();
                 $.ajax({
                     url: './dump.php',
                     type: 'POST',
                     data: formData + '&selectedData=' + selectedData,
                     success: function(response) {
-                        window.location.href = response;  // Download the generated SQL dump
+                        window.location.href = response;
+
+                        setTimeout(function() {
+                            $.ajax({
+                                url: './deleteFile.php',
+                                type: 'POST',
+                                data: { filePath: response },
+                                success: function(result) {
+                                    console.log("File deleted successfully: ", result);
+                                },
+                                error: function(err) {
+                                    console.error("Error deleting file: ", err);
+                                }
+                            });
+                        }, 5000);
+                        hidePreloader();
                     },
                     error: function(err) {
                         console.error("Error generating dump: ", err);
+                        hidePreloader();
                     }
                 });
             });
+
+            // Handle "Export CSV" button click
+            $('#exportCsv').on('click', function() {
+                var formData = $('#dbConnectForm').serialize();
+                var selectedData = JSON.stringify(selectedSchemas);
+
+                showPreloader();
+                $.ajax({
+                    url: './csvdump.php',
+                    type: 'POST',
+                    data: formData + '&selectedData=' + selectedData,
+                    success: function(response) {
+                        window.location.href = response;
+
+                        setTimeout(function() {
+                            $.ajax({
+                                url: './deleteFile.php',
+                                type: 'POST',
+                                data: { filePath: response },
+                                success: function(result) {
+                                    console.log("File deleted successfully: ", result);
+                                },
+                                error: function(err) {
+                                    console.error("Error deleting file: ", err);
+                                }
+                            });
+                        }, 5000);
+                        hidePreloader();
+                    },
+                    error: function(err) {
+                        console.error("Error exporting CSV: ", err);
+                        hidePreloader();
+                    }
+                });
+            });
+
         });
     </script>
 </body>
